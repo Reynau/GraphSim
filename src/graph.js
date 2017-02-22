@@ -1,4 +1,5 @@
 var paintutil = require("./paintutil")
+var util = require("./util")
 
 function Graph(canvas) {
 
@@ -23,7 +24,7 @@ function Graph(canvas) {
 
 
   // the currently dragged edge or {}
-  this.currentEdge = {}
+  this.currentEdge = new Edge()
 
   // whether or not the shift key is currently pressed
   this.shift = false
@@ -61,9 +62,22 @@ Graph.prototype.removeNode = function removeNode(n) {
 Graph.prototype.intersectsNode = function intersectsNode(x, y) {
   for (var i = 0; i < this.nodes.length; i++) {
     var n = this.nodes[i]
-    if (paintutil.dst(n.x, n.y, x, y) < this.NODE_R) return n
+    if (util.dst(n.x, n.y, x, y) < this.NODE_R) return n
   }
   return undefined
+}
+
+// returns the clicked node or undefined
+Graph.prototype.intersectsEdge = function intersectsEdge(x, y) {
+  var res = undefined
+  this.allEdges().forEach(function(e) {
+    var dst = util.pdst(x, y, e.sx(), e.sy(), e.dst.x, e.dst.y)
+    if (dst <= 5) {
+      res = e
+      return
+    }
+  })
+  return res
 }
 
 Graph.prototype.paint = function paint() {
@@ -78,14 +92,16 @@ Graph.prototype.paint = function paint() {
     if (n.sink) paintutil.drawCircle(this.ctx, n.x, n.y, this.NODE_SINK_R, c)
     paintutil.drawText(this.ctx, n.x, n.y, n.text, c)
     n.edges.forEach(function (e) {
-      paintutil.drawLine(this.ctx, n.x, n.y, e.dst.x, e.dst.y, this.NODE_R, this.NODE_R, c)
+      c = this.activeEdge == e ? this.NODE_COLOR_ACTIVE : this.NODE_COLOR
+      e.paint(this.ctx, c, this.NODE_R, this.NODE_R)
     }.bind(this))
   }.bind(this))
 
   this.initEdges.forEach(function (e) {
     var c = this.NODE_COLOR
     if (this.activeEdge == e) c = this.NODE_COLOR_ACTIVE
-    paintutil.drawLine(this.ctx, e.x, e.y, e.dst.x, e.dst.y, 0, this.NODE_R, c)
+    e.paint(this.ctx, c, 0, this.NODE_R)
+    //paintutil.drawLine(this.ctx, e.x, e.y, e.dst.x, e.dst.y, 0, this.NODE_R, c)
   }.bind(this))
 
   // current edge (dragged one)
@@ -95,18 +111,22 @@ Graph.prototype.paint = function paint() {
     var spY = 0
     var o1 = 0
     var o2 = 0
-    if (this.currentEdge.node !== undefined) {
-      spX = this.currentEdge.node.x
-      spY = this.currentEdge.node.y
+    spX = this.currentEdge.sx()
+    spY = this.currentEdge.sy()
+    if (!this.currentEdge.isInit()) {
       o1 = this.NODE_R
-    } else {
-      spX = this.currentEdge.x
-      spY = this.currentEdge.y
     }
-    paintutil.drawLine(this.ctx, spX, spY, this.mouseX, this.mouseY, o1, o2)
+    paintutil.drawLine(this.ctx, spX, spY, this.mouseX, this.mouseY, o1, o2, this.NODE_COLOR_ACTIVE)
   }
 }
 
+Graph.prototype.allEdges = function allEdges() {
+  var r = []
+  this.nodes.forEach(function(n) {
+    r = r.concat(n.edges)
+  })
+  return r.concat(this.initEdges)
+}
 Graph.prototype.mouseUpListener = function onMouseUp(e) {
   var x = e.pageX - this.canvas.offsetLeft
   var y = e.pageY - this.canvas.offsetTop
@@ -115,21 +135,26 @@ Graph.prototype.mouseUpListener = function onMouseUp(e) {
 
   if (this.interaction == "newedge") {
     if (n == undefined) {
-      this.currentEdge = {}
+      this.currentEdge = new Edge()
       paint()
       return
     }
 
-    if (this.currentEdge.node == undefined) {
+    this.currentEdge.dst = n
+    this.activeNode = undefined
+
+    if (this.currentEdge.src == undefined) {
       // new init edge
-      this.currentEdge.dst = n
       this.initEdges.push(this.currentEdge)
-      this.currentEdge = {}
+      this.activeEdge = this.currentEdge
+      this.currentEdge = new Edge()
     } else {
       // edge from node to node
       var index = this.nodes.indexOf(n)
       var edge = new Edge(n)
-      this.currentEdge.node.edges.push(edge)
+      edge.src = this.currentEdge.src
+      this.currentEdge.src.edges.push(edge)
+      this.activeEdge = edge
     }
   }
 
@@ -143,18 +168,26 @@ Graph.prototype.keyUpListener = function onKeyUp(e) {
 
 Graph.prototype.keyDownListener = function onKeyDown(e) {
   this.shift = e.shiftKey
-  if (this.activeNode === undefined) {
-    return
+  var target = undefined
+  var targetType = undefined
+  if (this.activeNode !== undefined) {
+    target = this.activeNode
+    targetType = "node"
+  } else if (this.activeEdge !== undefined) {
+    target = this.activeEdge
+    targetType = "edge"
   }
+  if (target == undefined) return
 
   if (e.key == 'Backspace') {
-    if (this.activeNode.text) {
-      this.activeNode.text = this.activeNode.text.slice(0, -1)
+    if (target.text) {
+      target.text = target.text.slice(0, -1)
     }
   } else if (e.key == 'Delete') {
-    this.removeNode(this.activeNode)
+    if (targetType == "node") this.removeNode(target)
+    else this.removeEdge(target)
   } else if (e.key.length == 1) {
-    this.activeNode.text += e.key
+    target.text += e.key
   }
 
   this.paint()
@@ -193,8 +226,6 @@ Graph.prototype.mouseMoveListener = function onMouseMove(e) {
     n.x = this.selectedNode.origX + x - this.selectedNode.mouseX
     n.y = this.selectedNode.origY + y - this.selectedNode.mouseY
 
-  } else if (this.interaction == "newedge") {
-    // TODO
   }
   this.paint()
 }
@@ -204,17 +235,19 @@ Graph.prototype.mouseDownListener = function onMouseDown(e) {
   var y = e.pageY - this.canvas.offsetTop
 
   var n = this.intersectsNode(x, y)
+  var edge = this.intersectsEdge(x, y)
 
   if (this.shift) {
     this.interaction = "newedge"
+    this.activeNode = undefined
     // we create an edge
-    var index = this.nodes.indexOf(n)
-    if (index != -1) {
+    if (n !== undefined) {
       // we start from a node
-      this.currentEdge.node = n
+      this.currentEdge.src = n
       this.currentEdge.x = this.currentEdge.y = -1
     } else {
-      this.currentEdge.node = undefined
+      // new init edge
+      this.currentEdge.src = undefined
       this.currentEdge.x = x
       this.currentEdge.y = y
     }
@@ -223,22 +256,27 @@ Graph.prototype.mouseDownListener = function onMouseDown(e) {
   }
 
 
-  this.interaction = "movenode"
 
   if (n !== undefined) {
+    this.interaction = "movenode"
     this.selectedNode.origX = n.x
     this.selectedNode.origY = n.y
     this.selectedNode.mouseX = x
     this.selectedNode.mouseY = y
     this.selectedNode.node = n
     this.activeNode = n
+    this.activeEdge = undefined
+  } else if (edge !== undefined) {
+    this.interaction = "moveedge"
+    this.activeEdge = edge
+    this.activeNode = undefined
   } else {
     this.selectedNode = {}
     this.activeNode = undefined
+    this.activeEdge = undefined
+    this.interaction = undefined
   }
-
   this.paint();
-
 }
 
 
@@ -267,14 +305,37 @@ function Edge(dst, text, r) {
   this.r = r || 0
 
   this.dst = dst
-  this.text = text
   this.r = r
 }
 
-// Adds an edge from this to n
-Node.prototype.addEdge = function addEdge(e) {
-  this.edges.push(e)
+Edge.prototype.paint = function paint(ctx, c, o1, o2) {
+  paintutil.drawLine(ctx,
+    this.sx(),
+    this.sy(),
+    this.dst.x,
+    this.dst.y,
+    o1, o2, c)
+
+    var x = Math.floor(this.sx() - (this.sx() - this.dst.x) / 2)
+    var y = Math.floor(this.sy() - (this.sy() - this.dst.y) / 2)
+
+  paintutil.drawText(ctx, x, y, this.text, c)
 }
+
+Edge.prototype.isInit = function isInit() { return !this.src }
+Edge.prototype.sx = function sx() { return this.isInit() ? this.x : this.src.x }
+Edge.prototype.sy = function sy() { return this.isInit() ? this.y : this.src.y }
+
+
+Graph.prototype.removeEdge = function removeEdge(e) {
+  console.log("removing edge")
+  this.initEdges = this.initEdges.filter(function (x) { return x != e })
+  this.nodes.forEach(function (n) {
+    n.edges = n.edges.filter(function (x) { return x != e })
+  })
+}
+
+
 
 module.exports = {
   Graph: Graph,
