@@ -18,9 +18,8 @@ function Graph(canvas) {
   // the node currently being dragged or {}
   this.selectedNode = {}
 
-  // the starting edge has no source node
-  // x, y, node
-  this.startingEdge = undefined
+  // edges without a src node but x and y properties
+  this.initEdges = []
 
 
   // the currently dragged edge or {}
@@ -43,12 +42,15 @@ function Graph(canvas) {
   this.canvas.addEventListener('mouseup', this.mouseUpListener.bind(this))
   this.canvas.addEventListener('keydown', this.keyDownListener.bind(this))
   this.canvas.addEventListener('keyup', this.keyUpListener.bind(this))
-
-
 }
 
 Graph.prototype.removeNode = function removeNode(n) {
   var i = this.nodes.indexOf(n)
+  // remove incoming init edges
+  this.initEdges = this.initEdges.filter(function(e) {
+    return e.dst !== n
+  })
+
   if (i != -1) {
     this.nodes.splice(i, 1)
   }
@@ -78,6 +80,12 @@ Graph.prototype.paint = function paint() {
     n.edges.forEach(function (e) {
       paintutil.drawLine(this.ctx, n.x, n.y, e.dst.x, e.dst.y, this.NODE_R, this.NODE_R, c)
     }.bind(this))
+  }.bind(this))
+
+  this.initEdges.forEach(function (e) {
+    var c = this.NODE_COLOR
+    if (this.activeEdge == e) c = this.NODE_COLOR_ACTIVE
+    paintutil.drawLine(this.ctx, e.x, e.y, e.dst.x, e.dst.y, 0, this.NODE_R, c)
   }.bind(this))
 
   // current edge (dragged one)
@@ -113,7 +121,10 @@ Graph.prototype.mouseUpListener = function onMouseUp(e) {
     }
 
     if (this.currentEdge.node == undefined) {
-      //this is the starting edge
+      // new init edge
+      this.currentEdge.dst = n
+      this.initEdges.push(this.currentEdge)
+      this.currentEdge = {}
     } else {
       // edge from node to node
       var index = this.nodes.indexOf(n)
@@ -207,8 +218,6 @@ Graph.prototype.mouseDownListener = function onMouseDown(e) {
       this.currentEdge.x = x
       this.currentEdge.y = y
     }
-
-
     this.paint()
     return
   }
