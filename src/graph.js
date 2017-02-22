@@ -141,7 +141,7 @@ Graph.prototype.keyDownListener = function onKeyDown(e) {
       this.activeNode.text = this.activeNode.text.slice(0, -1)
     }
   } else if (e.key == 'Delete') {
-    this.removeNode(activeNode)
+    this.removeNode(this.activeNode)
   } else if (e.key.length == 1) {
     this.activeNode.text += e.key
   }
